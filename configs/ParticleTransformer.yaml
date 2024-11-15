@@ -1,0 +1,25 @@
+# Hyperparameters of Particle Transformer.
+
+ParticleTransformer:
+
+  ParEmbed: # (pt_rel, delta_eta, delta_phi)
+    input_dim: 17 # JetCLass has 17 features
+    embed_dim: [128, 512, 128]
+
+  IntEmbed: # (delta, kt, z, m)
+    input_dim: 4 # JetClass has 4 features
+    embed_dim: [64, 64, 64]
+    include_mass: True
+
+  ParAtteBlock:
+    num_heads: 8
+    fc_dim: 512
+    dropout: 0.1
+
+  ClassAtteBlock:
+    num_heads: 8
+    fc_dim: 512
+    dropout: 0.0
+
+  num_ParAtteBlock: 8
+  num_ClassAtteBlock: 2

@@ -1,0 +1,24 @@
+# from setup.py
+build/
+*.egg-info
+
+# system
+.DS_Store
+__pycache__/
+.python-version
+
+# testing files
+_*
+a.py
+a.ipynb
+b.py
+b.ipynb
+
+# large data
+dataset/
+*.root
+*.hdf5
+*.npy
+
+# training result
+training_logs/

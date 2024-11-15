@@ -1,0 +1,17 @@
+# Hyperparameters of Particle Net.
+
+ParticleNet:
+
+  input_dim: 3 # (pt_rel, delta_eta, delta_phi)
+
+  edge_conv: [
+      # [top_k_neighbor, [[channel_1_in, channel_1_out], [channel_2_in, channel_2_out], ...]]
+      [3, [[64, 64], [64, 64], [64, 64]]], # 16
+      [3, [[64, 128], [128, 128], [128, 128]]], # 16
+  ]
+
+  fc: [
+      # [dropout_rate, [channel_in, channel_out]]
+      [0.1, [128, 256]],
+      [0.1, [256, 256]],
+  ]

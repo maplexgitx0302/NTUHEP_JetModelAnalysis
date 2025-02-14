@@ -21,4 +21,5 @@ dataset/
 *.npy
 
 # training result
+intermediate_outputs/
 training_logs/

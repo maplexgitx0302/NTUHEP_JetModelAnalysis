@@ -30,7 +30,7 @@ def cms_to_cartesian(pt: torch.Tensor, eta: torch.Tensor, phi: torch.Tensor) -> 
 
 
 @torch.jit.script
-def prepare_interaction(x: torch.Tensor, include_mass: bool, eps: float = 1E-9) -> torch.Tensor:
+def prepare_interaction(x: torch.Tensor, INCLUDE_MASS: bool, eps: float = 1E-9) -> torch.Tensor:
     """Prepare the features for interaction matrix U.
 
     Args:
@@ -38,7 +38,7 @@ def prepare_interaction(x: torch.Tensor, include_mass: bool, eps: float = 1E-9) 
             Input tensor of shape (N, L, D), where N is the batch size,
             L is the number of particles, and D is the feature dimension
             corresponding to (pt, deta, dphi).
-        include_mass : bool
+        INCLUDE_MASS : bool
             Whether to include the mass of the particles.
     Returns:
         torch.Tensor
@@ -65,7 +65,7 @@ def prepare_interaction(x: torch.Tensor, include_mass: bool, eps: float = 1E-9) 
     z = (torch.minimum(pt_i, pt_j) / (pt_i + pt_j)).clamp(min=eps)  # (N, L, L)
 
     # Calculate the mass of the particles.
-    if include_mass:
+    if INCLUDE_MASS:
         E_i = x_i[..., 3]  # (N, L, 1)
         E_j = x_j[..., 3]  # (N, 1, L)
 
@@ -290,7 +290,7 @@ class ParticleTransformer(nn.Module):
         )
 
         # Interaction Embedding.
-        self.include_mass = parameters['IntEmbed']['include_mass']
+        self.INCLUDE_MASS = (parameters['IntEmbed']['input_dim'] == 4)
         self.int_embedding = InteractionMatrixEmbedding(
             input_dim=parameters['IntEmbed']['input_dim'],
             embedding_dims=parameters['IntEmbed']['embed_dim'] + [parameters['ParAtteBlock']['num_heads']],
@@ -343,7 +343,7 @@ class ParticleTransformer(nn.Module):
             # Calculate interaction matrix.
             U_mask = (key_padding_mask.unsqueeze(-1) | key_padding_mask.unsqueeze(-2))  # (N, L, L)
             U_mask = U_mask.unsqueeze(-3)  # (N, 1, L, L)
-            U = prepare_interaction(x, self.include_mass)  # (N, 4, L, L)
+            U = prepare_interaction(x, self.INCLUDE_MASS)  # (N, 4, L, L)
             U = U.masked_fill(U_mask, 0.0)  # (N, 4, L, L)
 
         # Particle and interaction embedding.

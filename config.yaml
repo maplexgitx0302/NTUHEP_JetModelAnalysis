@@ -1,4 +1,4 @@
-dataset: 'JetClass'
+dataset: 'JetNet'
 model: 'ParticleTransformer'
 
 rnd_seed: 42

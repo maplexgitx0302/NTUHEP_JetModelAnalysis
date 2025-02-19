@@ -23,7 +23,7 @@ intermediate_outputs = summary['intermediate_outputs']
 heatmap = ParticleTransformerHeatmap(
     particle_features=particle_features,
     intermediate_outputs=intermediate_outputs,
-    figsize=(2000, 575)
+    linear_weights=summary['linear_weights'],
 )
 
 # Create the Dash app.

@@ -8,68 +8,158 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-class HeatmapObject:
-    def __init__(self, particle_features: pd.DataFrame, figsize: tuple[int, int]):
-        """Template class for heatmap dashboard."""
+def normalization(matrix: np.ndarray, method: str) -> np.ndarray:
+    methods = {
+        "softmax": lambda x: np.exp(x) / np.sum(np.exp(x), axis=1, keepdims=True),
+        "uniform": lambda x: x / np.maximum(np.sum(x, axis=1, keepdims=True), 1),
+        "minmax": lambda x: (x - np.min(x, axis=1, keepdims=True)) / np.maximum(
+            np.max(x, axis=1, keepdims=True) - np.min(x, axis=1, keepdims=True), 1
+        ),
+    }
+    return methods.get(method, lambda x: x)(matrix)
 
+
+class HeatmapObject:
+    def __init__(
+        self,
+        particle_features: pd.DataFrame = None,
+        intermediate_outputs: pd.DataFrame = None,
+        linear_weights: pd.DataFrame = None,
+    ):
+        """Template class for heatmap dashboard."""
         self.particle_features = particle_features
-        self.figsize = figsize
+        self.intermediate_outputs = intermediate_outputs
+        self.linear_weights = linear_weights
 
     def plot(self, channel, data_index, epoch_index, io_indices) -> go.Figure:
         """Plot the features and intermediate outputs."""
 
-        # The first row is for particle features.
-        particle_features = self.particle_features[
-            (self.particle_features['channel'] == channel) &
-            (self.particle_features['data_index'] == data_index)
-        ]
-        features = particle_features['feature'].unique()
-
-        # The rest of rows are for intermediate outputs.
-        intermediate_outputs = self.intermediate_outputs_matrices(channel, data_index, epoch_index, io_indices)
-
-        # Determine the number of rows and columns.
-        num_row = 1 + len(intermediate_outputs)
-        num_col = max(len(features), max(len(outputs) for outputs in intermediate_outputs))
-
-        # Determine the subplot titles.
+        # Plotly subplots configurations.
+        num_row = 0
+        num_col = 0
         subplot_titles = []
-        subplot_titles += [f for f in features] + [''] * (num_col - len(features))
-        for row_outputs in intermediate_outputs:
-            subplot_titles += [row_outputs[i][0] for i in range(len(row_outputs))] + [''] * (num_col - len(row_outputs))
+
+        # Particle features.
+        if self.particle_features is not None:
+            features = self.particle_features['feature'].unique()
+            num_row += 2
+            num_col = max(num_col, len(features))
+
+            # Particle features used for training.
+            particle_features: pd.DataFrame = self.particle_features[
+                (self.particle_features['channel'] == channel) &
+                (self.particle_features['data_index'] == data_index)
+            ]
+
+            # Correlation matrices of features.
+            X = np.stack([particle_features[particle_features['feature'] == feature]['array'].values[0] for feature in features], axis=1)
+            X = np.where(np.isfinite(X), X, 0)
+            correlations = []
+            for norm_method in ['softmax', 'uniform', 'minmax']:
+                X_normalized = normalization(X, method=norm_method)
+                corr_matrix = np.dot(X_normalized, X_normalized.T)
+                correlations.append((norm_method, corr_matrix))
+
+            subplot_titles.append([f for f in features])
+            subplot_titles.append([f"{norm_method.upper()} Corr" for norm_method, _ in correlations])
+
+        # Linear weights and biases.
+        if self.linear_weights is not None:
+            fields = self.linear_weights['field'].unique()
+            num_row += 1
+            num_col = max(num_col, len(fields))
+            subplot_titles.append([f"W {field}" for field in fields])
+
+        # Intermediate outputs.
+        if self.intermediate_outputs is not None:
+            intermediate_outputs = self.intermediate_outputs_matrices(channel, data_index, epoch_index, io_indices)
+            num_row += len(intermediate_outputs)
+            num_col = max(num_col, max(len(outputs) for outputs in intermediate_outputs))
+            for row_outputs in intermediate_outputs:
+                subplot_titles.append([row_outputs[i][0] for i in range(len(row_outputs))])
 
         # Create the figure with plotly.
+        subplot_titles = [row_titles + [''] * (num_col - len(row_titles)) for row_titles in subplot_titles]
+        subplot_titles = list(itertools.chain(*subplot_titles))
         fig = make_subplots(rows=num_row, cols=num_col, subplot_titles=subplot_titles)
+        current_row = 0
 
-        # Add the particle features to the first row.
-        for i, feature in enumerate(features):
-            data = particle_features[particle_features['feature'] == feature]['array'].values[0]
-            data = self.feature_to_square_matrix(data)
-            fig.add_trace(go.Heatmap(z=data, colorscale="Viridis", showscale=False), row=1, col=i + 1)
+        if self.particle_features is not None:
+            # Add the particle features to the fig.
+            current_row += 1
+            for i, feature in enumerate(features):
+                data = particle_features[particle_features['feature'] == feature]['array'].values[0]
+                if ('part_pt' in feature) or ('part_E' in feature):
+                    data = self.pad_to_square_matrix(data, pad_method='product')
+                    data = normalization(data, method='uniform')
+                elif ('eta' in feature) or ('phi' in feature) or ('charge' in feature) or ('dR' in feature):
+                    data = self.pad_to_square_matrix(data, pad_method='sum')
+                    data = normalization(data, method='softmax')
+                elif 'is' in feature:
+                    data = self.pad_to_square_matrix(data, pad_method='product')
+                    data = normalization(data, method='minmax')
+                else:
+                    data = self.pad_to_square_matrix(data, pad_method='min_symmetric_pad')
+                fig.add_trace(go.Heatmap(z=data, colorscale="Viridis", showscale=False), row=current_row, col=1 + i)
 
-        # Add the intermediate outputs to the rest of rows.
-        for i, row_outputs in enumerate(intermediate_outputs):
-            for j, (_, data) in enumerate(row_outputs):
-                fig.add_trace(go.Heatmap(z=data, colorscale="Viridis", showscale=False), row=2 + i, col=j + 1)
+            # Add the correlation matrices to the fig.
+            current_row += 1
+            for i, (_, data) in enumerate(correlations):
+                fig.add_trace(go.Heatmap(z=data, colorscale="Viridis", showscale=False), row=current_row, col=1 + i)
 
-        # Update the layout.
-        fig.update_layout(width=self.figsize[0], height=self.figsize[1])
+        if self.linear_weights is not None:
+            # Add the linear weights to the fig.
+            current_row += 1
+            for i, field in enumerate(fields):
+                w = self.linear_weights[
+                    (self.linear_weights['field'] == field) &
+                    (self.linear_weights['epoch_index'] == epoch_index)
+                ]['weights'].values[0]
+                fig.add_trace(go.Histogram(x=w, showlegend=False), row=current_row, col=i + 1)
+
+        if self.intermediate_outputs is not None:
+            # Add the intermediate outputs to the fig.
+            for i, row_outputs in enumerate(intermediate_outputs):
+                current_row += 1
+                for j, (_, data) in enumerate(row_outputs):
+                    showscale = (i == 0) and (j == 0)
+                    fig.add_trace(go.Heatmap(z=data, colorscale="Viridis", showscale=showscale), row=current_row, col=j + 1)
+
+        # Set the width and height of the figure.
+        width = 150 * num_col + 500  # Base width + extra space
+        height = 225 * num_row + 100  # Base height + extra space
+        fig.update_layout(width=width, height=height)
+
+        # Make the font size smaller.
+        font_size = int((width / num_col) / 15)
+        fig.update_layout(annotations=[dict(font=dict(size=font_size)) for _ in fig['layout']['annotations']])
 
         return fig
 
-    def feature_to_square_matrix(self, feature) -> np.ndarray:
-        """Make 1D feature array into a square matrix."""
+    def pad_to_square_matrix(self, feature, pad_method: str = None) -> np.ndarray:
+        """Convert a 1D feature array into a square matrix based on the specified padding method."""
 
+        # Number of particles.
         num_ptcs = len(feature)
-        min_value = min(feature)
-        max_value = max(feature)
 
-        # Pad non-diagonal elements with the min_value - (max_value - min_value).
-        pad_value = 2 * min_value - max_value
-        diagonal = np.full((num_ptcs, num_ptcs), pad_value)
-        np.fill_diagonal(diagonal, feature)
+        # Pad the feature array to a square matrix.
+        if pad_method == 'min_symmetric_pad':
+            # Compute padding value as min_value - (max_value - min_value)
+            min_value = np.min(feature)
+            max_value = np.max(feature)
+            pad_value = 2 * min_value - max_value
+            # Create a square matrix filled with the pad value and set the diagonal
+            matrix = np.full((num_ptcs, num_ptcs), pad_value)
+            np.fill_diagonal(matrix, feature)
+        elif pad_method == 'product':
+            matrix = np.outer(feature, feature)
+        elif pad_method == 'sum':
+            matrix = np.add.outer(feature, feature)
+        else:
+            matrix = np.full((num_ptcs, num_ptcs), 0)
+            np.fill_diagonal(matrix, feature)
 
-        return diagonal
+        return matrix
 
     def intermediate_outputs_matrices(self, channel: str, data_index: int, epoch_index: int, io_indices: list[int]) -> list[list[tuple[str, np.ndarray]]]:
         """To be implemented in the child class.
@@ -86,23 +176,16 @@ class HeatmapObject:
             io_indices: list[int]
                 The indices of the intermediate outputs.
         Returns:
-            In format of:
             [
                 [(io_1_1, matrix_1_1), (io_1_2, matrix_1_2), ...],
                 [(io_2_1, matrix_2_1), (io_2_2, matrix_2_2), ...],
             ]
         """
 
-        raise NotImplementedError
+        pass
 
 
 class ParticleTransformerHeatmap(HeatmapObject):
-    def __init__(self, particle_features: pd.DataFrame, intermediate_outputs: pd.DataFrame, figsize: tuple[int, int]):
-
-        super().__init__(particle_features=particle_features, figsize=figsize)
-
-        self.intermediate_outputs = intermediate_outputs
-
     def intermediate_outputs_matrices(self, channel, data_index, epoch_index, io_indices):
         # Extract the indices in `io_indices`.
         block_index = io_indices[0]
@@ -195,30 +278,33 @@ class HeatmapDashboard:
 
     def setup_callbacks(self):
         # App callback `Output` (related to the order of return values).
-        app_output = []
-        app_output += [Output('heatmap_grid', 'figure')]
-        app_output += [Output('current_channel', 'children')]
-        app_output += [Output('current_data', 'children')]
-        app_output += [Output('current_epoch', 'children')]
-        app_output += [Output(f'current_io_{i}', 'children') for i in range(len(self.io_buttons))]
-        app_output += [Output(f'channel_{i}', 'style') for i in range(len(self.channels))]
-        app_output += [Output(f'data_{i}', 'style') for i in range(self.num_data)]
-        app_output += [Output(f'epoch_{i}', 'style') for i in range(self.num_epochs)]
-        app_output += [Output(f'io_{i}_{j}', 'style') for i in range(len(self.io_buttons)) for j in range(len(self.io_buttons[i]))]
+        app_output = [
+            Output("heatmap_grid", "figure"),
+            Output("current_channel", "children"),
+            Output("current_data", "children"),
+            Output("current_epoch", "children"),
+            *[Output(f"current_io_{i}", "children") for i in range(len(self.io_buttons))],
+            *[Output(f"channel_{i}", "style") for i in range(len(self.channels))],
+            *[Output(f"data_{i}", "style") for i in range(self.num_data)],
+            *[Output(f"epoch_{i}", "style") for i in range(self.num_epochs)],
+            *[Output(f"io_{i}_{j}", "style") for i, row in enumerate(self.io_buttons) for j in range(len(row))],
+        ]
 
         # App callback `Input` (related to clicks).
-        app_input = []
-        app_input += [Input(f'channel_{i}', 'n_clicks') for i in range(len(self.channels))]
-        app_input += [Input(f'data_{i}', 'n_clicks') for i in range(self.num_data)]
-        app_input += [Input(f'epoch_{i}', 'n_clicks') for i in range(self.num_epochs)]
-        app_input += [Input(f'io_{i}_{j}', 'n_clicks') for i in range(len(self.io_buttons)) for j in range(len(self.io_buttons[i]))]
+        app_input = [
+            *[Input(f"channel_{i}", "n_clicks") for i in range(len(self.channels))],
+            *[Input(f"data_{i}", "n_clicks") for i in range(self.num_data)],
+            *[Input(f"epoch_{i}", "n_clicks") for i in range(self.num_epochs)],
+            *[Input(f"io_{i}_{j}", "n_clicks") for i, row in enumerate(self.io_buttons) for j in range(len(row))],
+        ]
 
         # App callback `State` (related to the order of *args of the decorated function).
-        app_state = []
-        app_state += [State('current_channel', 'children')]
-        app_state += [State('current_data', 'children')]
-        app_state += [State('current_epoch', 'children')]
-        app_state += [State(f'current_io_{i}', 'children') for i in range(len(self.io_buttons))]
+        app_state = [
+            State('current_channel', 'children'),
+            State('current_data', 'children'),
+            State('current_epoch', 'children'),
+            *[State(f'current_io_{i}', 'children') for i in range(len(self.io_buttons))],
+        ]
 
         # Callback to update heatmap grid, block switching, and button colors.
         @self.app.callback(app_output, app_input, app_state)
@@ -249,17 +335,18 @@ class HeatmapDashboard:
             fig = self.heatmap.plot(self.channels[channel_idx], data_idx, epoch_idx, io_indices)
 
             # Update the button styles, especially the clicked button.
-            styles = self.generate_button_styles(channel_idx, data_idx, epoch_idx, io_indices)
+            styles = self._get_button_styles(channel_idx, data_idx, epoch_idx, io_indices)
 
             # The return values should be in the order of `app_output`.
             return [fig, channel_idx, data_idx, epoch_idx, *io_indices] + styles
 
-    def generate_button_styles(self, channel_idx, data_idx, epoch_idx, io_indices):
+    def _get_button_styles(self, channel_idx, data_idx, epoch_idx, io_indices):
         """Update button colors based on the current indices."""
-        styles = []
-        styles += [self.active_style if i == channel_idx else self.default_style for i in range(len(self.channels))]
-        styles += [self.active_style if i == data_idx else self.default_style for i in range(self.num_data)]
-        styles += [self.active_style if i == epoch_idx else self.default_style for i in range(self.num_epochs)]
+        styles = [
+            *[self.active_style if i == channel_idx else self.default_style for i in range(len(self.channels))],
+            *[self.active_style if i == data_idx else self.default_style for i in range(self.num_data)],
+            *[self.active_style if i == epoch_idx else self.default_style for i in range(self.num_epochs)],
+        ]
         for i, io_index in enumerate(io_indices):
             styles += [self.active_style if j == io_index else self.default_style for j in range(len(self.io_buttons[i]))]
         return styles
@@ -288,7 +375,10 @@ if __name__ == '__main__':
 
     particle_features, intermediate_outputs = generate_sample_data(channels, num_data, num_epochs, num_blocks, num_heads)
 
-    heatmap = ParticleTransformerHeatmap(particle_features, intermediate_outputs, figsize=(1000, 625))
+    heatmap = ParticleTransformerHeatmap(
+        particle_features=particle_features,
+        intermediate_outputs=intermediate_outputs,
+    )
     dashboard = HeatmapDashboard(channels, num_data, num_epochs, heatmap, io_buttons=[[f"Head {i+1}" for i in range(num_heads)]])
 
     dashboard.run()

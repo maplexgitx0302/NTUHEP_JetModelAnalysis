@@ -1,4 +1,4 @@
-dataset: 'JetNet'
+dataset: 'JetClass'
 model: 'ParticleTransformer'
 
 rnd_seed: 42
@@ -13,13 +13,7 @@ DataModule:
 
 JetNet:
   pad_num_ptcs: 30
-  dash_features: ['log_part_pt', 'part_deta', 'part_dphi']
 
 JetClass:
   pad_num_ptcs: 64
   num_root: 2
-  dash_features: [
-    'log_part_pt', 'log_part_E', 'part_deta', 'part_dR',
-    'part_charge', 'part_isElectron', 'part_isMuon', 'part_isPhoton',
-    'part_isChargedHadron', 'part_isNeutralHadron',
-  ]
